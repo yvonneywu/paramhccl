@@ -26,25 +26,13 @@ from collections import defaultdict
 from sklearn import metrics
 from pynndescent import NNDescent
 from tqdm import tqdm
-from dataloaderq.dataloaderm import data_generator
-import framework
-import GPUtil
+from dataloaderq.dataloaderm_ori import data_generator
+import framework_original as framework
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0,1'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1' ##the original code use only this setting, which means they only use one GPU?
+torch.backends.cudnn.enabled = False
 
-# print(torch.cuda.is_available())
-
-with_gpu = torch.cuda.is_available()
-if with_gpu:
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
-print('We are using %s now.' %device)
-
-gpus = GPUtil.getGPUs()
-for gpu in gpus:
-    print(f"GPU {gpu.id}: {gpu.load*100}%")
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 parser = argparse.ArgumentParser(description='MHCCL Training')
 
@@ -133,11 +121,11 @@ parser.add_argument('--replace_centroids', action="store_true",
 parser.add_argument('--usetemp', action="store_true",
                     help='adopt temperature in loss')
 
-parser.add_argument('--mask_mode', default='mask_proportion', type=str, choices=['mask_farthest', 'mask_threshold', 'mask_proportion'],
+parser.add_argument('--mask_mode', default='mask_farthest', type=str, choices=['mask_farthest', 'mask_threshold', 'mask_proportion'],
                     help='select the mask mode (default: mask_farthest, other values:'
                          'mask_threshold(if use, specify the dist_threshold), '
                          'mask_proportion(if use, specify the proportion')
-parser.add_argument('--dist_threshold', default=0.7, type=float,
+parser.add_argument('--dist_threshold', default=0.3, type=float,
                     help='specify the distance threshold beyond which points will be masked '
                          'when select the mask_threshold mode')
 parser.add_argument('--proportion', default=0.5, type=float,
@@ -174,7 +162,7 @@ def main():
                 exp_dir = f'experiment_{args.dataset_name}_{args.mask_mode}_layerall_{args.proportion}'
             else:
                 exp_dir = f'experiment_{args.dataset_name}_{args.mask_mode}_layerall'
-    
+
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -200,9 +188,7 @@ def main():
         print(f'make experiment directory: {exp_dir} ')
 
     ngpus_per_node = torch.cuda.device_count()
-    print('ngpus_per_node:',ngpus_per_node )
     if args.multiprocessing_distributed:
-        print('Go to parallel')
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
         args.world_size = ngpus_per_node * args.world_size
@@ -210,7 +196,6 @@ def main():
         # main_worker process function
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args, exp_dir))
     else:
-        print('jump to simply?')
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args, exp_dir)
 
@@ -221,26 +206,23 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
 
-    # suppress printing if not master--> suppress the priting...   
+    # suppress printing if not master    
     if args.multiprocessing_distributed and args.gpu != 0:
         def print_pass(*args):
             pass
         builtins.print = print_pass
-
+        
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
             args.rank = int(os.environ["RANK"])
-        if args.multiprocessing_distributed:    
+        if args.multiprocessing_distributed:
             # For multiprocessing distributed training, rank needs to be the
             # global rank among all the processes
             args.rank = args.rank * ngpus_per_node + gpu
-            print("Rank Number: {} for training".format(args.rank))
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-        print(f"Initialized process group: rank {args.rank}, world size {args.world_size}")
-
     # create model
-    print("=> creating model ")
+    print('creating model')
     model = framework.MHCCL(args.low_dim, args.posi, args.negi, args.posp, args.negp, args.moco_m,
                             args.tempi, args.tempp, args.usetemp, args.mlp, args.dataset_name)
 
@@ -314,9 +296,7 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
     elif args.dataset_name == 'SHAR':
         from config_files.SHAR_Configs import Config as Configs
         configs = Configs()
-        # train_loader, eval_loader = data_generator('data/SHAR', configs, 'self_supervised')
-        train_loader, eval_loader, train_sampler  = data_generator('data/SHAR', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
-                                               distributed=args.distributed)
+        train_loader, eval_loader = data_generator('data/SHAR', configs, 'self_supervised')
     elif args.dataset_name == 'PenDigits':
         from config_files.PenDigits_Configs import Config as Configs
         configs = Configs()
@@ -333,21 +313,18 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
         from config_files.FingerMovements_Configs import Config as Configs
         configs = Configs()
         train_loader, eval_loader = data_generator('data/sleepEDF', configs, 'self_supervised')
-
-
+        
+  
 
     for epoch in range(args.start_epoch, args.epochs):
         cluster_result = None
-        c = torch.tensor([],device=device)
-        # c = None
-
         if epoch >= args.warmup_epoch:
             features = compute_features(train_loader, model, args)
+            print(f'features.shape:{features.shape}')
             # placeholder for clustering result
             cluster_result = {'im2cluster':[],'centroids':[],'density':[]}
 
-            if args.gpu == 1: 
-            # if args.gpu == 0:
+            if args.gpu == 0:
                 features[torch.norm(features,dim=1)>1.5] /= 2 #account for the few samples that are computed twice  
                 features = features.numpy()
                 start = time.time()
@@ -369,50 +346,18 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
 
                 # save the clustering result
                 torch.save(cluster_result, os.path.join(exp_dir, 'clusters_%d'%epoch))
-                # added by sally #
-                c = torch.from_numpy(c).to(device)
 
-            # dist.barrier()  
-            # print(f"Process {dist.get_rank()}")
-            # for k, data_list in cluster_result.items():
-            #     for data_tensor in data_list:
-            #         # print(f'Process {dist.get_rank()}, Before broadcast: shape={data_tensor.shape}, device={data_tensor.device}')
-            #         dist.broadcast(data_tensor, 0, async_op=False)
-            #         # print(f'Process {dist.get_rank()}, After broadcast: shape={data_tensor.shape}, device={data_tensor.device}')
-            
-            ##check here the c and cluster result looks like
-            print(f"Process {torch.distributed.get_rank()} reached the broadcast")
             dist.barrier()
             # broadcast clustering result
             for k, data_list in cluster_result.items():
                 for data_tensor in data_list:
-                    print('data_list', data_list)
                     dist.broadcast(data_tensor, 0, async_op=False)
-            # print('broadcasting cluster successful')
-
-            dist.broadcast(c, 0, async_op=False)
-            # print('broadcasting C successful')
-
-            # print(f"Process {torch.distributed.get_rank()} completed the broadcast")
-
-            dist.barrier()
-            print(f"Process {torch.distributed.get_rank()} passed the barrier")
-
-        # print(cluster_result)
-        if args.distributed:
-            print('move to here...')
-            train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        start_time = time.time()    
-        # print('check what is c here..', cluster_result,torch.cuda.current_device())
-        train(train_loader, model, criterion, optimizer, epoch, args, cluster_result, c)    
-
-        end_time = time.time()
-        # Calculate and print the epoch time
-        epoch_time = end_time - start_time
-        print(f"Time for one epoch: {epoch_time:.2f} seconds")
+        print('check what is c here, c type, device.', type(c), c.dtype)
+        print('check what is cluters_result here..', cluster_result)
+        train(train_loader, model, criterion, optimizer, epoch, args, cluster_result, c)
 
         if (epoch + 1) % 10 == 0 and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0)):
@@ -434,26 +379,20 @@ def train(train_loader, model, criterion, optimizer, epoch, args, cluster_result
     # switch to train mode
     model.train()
     end = time.time()
-    batch_num = 0
-    
+
     for i, (data, target, aug1, aug2, index) in enumerate(train_loader):
-        print('current batch_num:', batch_num)
-        # measure data loading time
         data_time.update(time.time() - end)
         if args.gpu is not None:
-            # print(f"Current GPU: {torch.cuda.current_device()}")
             aug1 = aug1.unsqueeze(3)
             aug2 = aug2.unsqueeze(3)
             aug1, aug2 = aug1.float().cuda(args.gpu, non_blocking=True), aug2.float().cuda(args.gpu, non_blocking=True)
-            # print('aug1 data device,', aug1.device)
 
-        #compute output
         output, target, output_proto, target_proto = model(im_q=aug1, im_k=aug2, cluster_result=cluster_result, c=c, index=index)
 
         # instance-wise contrastive loss (infoNCE)
         loss = criterion(output.cuda(args.gpu, non_blocking=True), torch.tensor(target).float().cuda(args.gpu, non_blocking=True))
 
-        # print(f'instance-wise contrastive loss:{loss}')
+        print(f'instance-wise contrastive loss:{loss}')
         if args.protoNCE_only is True:
             loss = loss - loss
 
@@ -481,9 +420,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args, cluster_result
 
         if i % args.print_freq == 0:
             progress.display(i)
-        batch_num += 1
-
-
 
             
 def compute_features(data_loader, model, args):
@@ -590,7 +526,6 @@ def hierarchical_clustering(x, args, initial_rank=None, distance='cosine', ensur
     min_dis_dict = dict()
 
     """mask strategy"""
-    ### different strategies to select&remove tne outliers...
     # mode 1: mask one point farthest from the centroid of each cluster
     if args.mask_mode == 'mask_farthest':
         for i in range(0, num_clust):  # calculate the distance between points and the centroids within each cluster
@@ -793,8 +728,6 @@ def hierarchical_clustering(x, args, initial_rank=None, distance='cosine', ensur
         im2cluster = torch.LongTensor(im2cluster).cuda()
         results['im2cluster'].append(im2cluster)
 
-    ##results = [results,c]
-
     return c, num_clust, partition_clustering, lowest_level_centroids, req_c, results
     # c: NxP matrix. cluster label for every partition P. array(n_samples, n_partitions)
     # num_clust: number of clusters. array(n_partitions)
@@ -966,3 +899,4 @@ def req_numclust(c, data, req_clust, distance):
 
 if __name__ == '__main__':
     main()
+    print('Training is done!')

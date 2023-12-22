@@ -7,6 +7,7 @@ import torch.optim
 import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
+import faiss
 
 import copy
 import builtins
@@ -21,30 +22,34 @@ import argparse
 import numpy as np
 import scipy.sparse as sp
 import scipy.spatial as ss
-
+import logging
 from collections import defaultdict
 from sklearn import metrics
 from pynndescent import NNDescent
 from tqdm import tqdm
 from dataloaderq.dataloaderm import data_generator
 import framework
-import GPUtil
+# import GPUtil
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0,1'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1' ##the original code use only this setting, which means they only use one GPU?
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0' ##the original code use only this setting, which means they only use one GPU?
 
-# print(torch.cuda.is_available())
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1' ##the original code use only this setting, which means they only use one GPU?
+print(torch.cuda.is_available())
+#yw: set False so that the large daaset like ECG and sleepEDF can be loaded
+torch.backends.cudnn.enabled = False
 
 with_gpu = torch.cuda.is_available()
 if with_gpu:
-    device = torch.device("cuda")
+     device = torch.device("cuda")
 else:
-    device = torch.device("cpu")
+     device = torch.device("cpu")
 print('We are using %s now.' %device)
-
-gpus = GPUtil.getGPUs()
-for gpu in gpus:
-    print(f"GPU {gpu.id}: {gpu.load*100}%")
+#yw: using GPUtil to monitor the gpu usage...
+# gpus = GPUtil.getGPUs()
+# for gpu in gpus:
+#     print(f"GPU {gpu.id}: {gpu.load*100}%")
 
 parser = argparse.ArgumentParser(description='MHCCL Training')
 
@@ -199,6 +204,7 @@ def main():
         os.mkdir(exp_dir)
         print(f'make experiment directory: {exp_dir} ')
 
+    # ngpus_per_node = torch.cuda.device_count()-2 ##why here minus 2?
     ngpus_per_node = torch.cuda.device_count()
     print('ngpus_per_node:',ngpus_per_node )
     if args.multiprocessing_distributed:
@@ -210,7 +216,6 @@ def main():
         # main_worker process function
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args, exp_dir))
     else:
-        print('jump to simply?')
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args, exp_dir)
 
@@ -221,7 +226,7 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
 
-    # suppress printing if not master--> suppress the priting...   
+    # suppress printing if not master    
     if args.multiprocessing_distributed and args.gpu != 0:
         def print_pass(*args):
             pass
@@ -234,11 +239,8 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
             # For multiprocessing distributed training, rank needs to be the
             # global rank among all the processes
             args.rank = args.rank * ngpus_per_node + gpu
-            print("Rank Number: {} for training".format(args.rank))
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-        print(f"Initialized process group: rank {args.rank}, world size {args.world_size}")
-
     # create model
     print("=> creating model ")
     model = framework.MHCCL(args.low_dim, args.posi, args.negi, args.posp, args.negp, args.moco_m,
@@ -257,6 +259,7 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            # print('model distributed to gpus' + str(args.gpu))
         else:
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
@@ -310,12 +313,14 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
     elif args.dataset_name == 'epilepsy':
         from config_files.epilepsy_Configs import Config as Configs
         configs = Configs()
-        train_loader, eval_loader = data_generator('data/epilepsy', configs, 'self_supervised')
+        # train_loader, eval_loader = data_generator('data/epilepsy', configs, 'self_supervised')
+        train_loader, eval_loader, train_sampler = data_generator('data/epilepsy', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
+                                               distributed=args.distributed)
     elif args.dataset_name == 'SHAR':
         from config_files.SHAR_Configs import Config as Configs
         configs = Configs()
         # train_loader, eval_loader = data_generator('data/SHAR', configs, 'self_supervised')
-        train_loader, eval_loader, train_sampler  = data_generator('data/SHAR', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
+        train_loader, eval_loader, train_sampler = data_generator('data/SHAR', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
                                                distributed=args.distributed)
     elif args.dataset_name == 'PenDigits':
         from config_files.PenDigits_Configs import Config as Configs
@@ -332,23 +337,28 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
     elif args.dataset_name == 'sleepEDF':
         from config_files.FingerMovements_Configs import Config as Configs
         configs = Configs()
-        train_loader, eval_loader = data_generator('data/sleepEDF', configs, 'self_supervised')
-
+        # train_loader, eval_loader = data_generator('data/sleepEDF', configs, 'self_supervised')
+        train_loader, eval_loader, train_sampler = data_generator('data/sleepEDF', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
+                                               distributed=args.distributed)
+    elif args.dataset_name == 'ECG':
+        from config_files.FingerMovements_Configs import Config as Configs
+        configs = Configs()
+        # train_loader, eval_loader = data_generator('data/sleepEDF', configs, 'self_supervised')
+        train_loader, eval_loader, train_sampler = data_generator('data/ECG', configs, 'self_supervised', rank=args.rank, world_size=args.world_size, 
+                                               distributed=args.distributed)
 
 
     for epoch in range(args.start_epoch, args.epochs):
         cluster_result = None
-        c = torch.tensor([],device=device)
-        # c = None
 
         if epoch >= args.warmup_epoch:
             features = compute_features(train_loader, model, args)
             # placeholder for clustering result
             cluster_result = {'im2cluster':[],'centroids':[],'density':[]}
+            print('features shape:', features.shape, features.device)
 
-            if args.gpu == 1: 
-            # if args.gpu == 0:
-                features[torch.norm(features,dim=1)>1.5] /= 2 #account for the few samples that are computed twice  
+            if args.gpu == 0:
+                features[torch.norm(features,dim=1)>1.5] /= 2 #account for the few samples that are computed twice
                 features = features.numpy()
                 start = time.time()
 
@@ -357,9 +367,15 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
                                             ensure_early_exit=True, verbose=True, ann_threshold=40000)
                 # c: save the cluster_labels of each instance in all partitions
                 # partition_clustering: save the hierarchical merging relation of the tree structure
-                if (epoch + 1) % 10 == 0:
+
+                c = torch.tensor(c, dtype=torch.float32).cuda(args.gpu)
+                c_size = torch.tensor(c.size(), dtype=torch.long).cuda(args.gpu)
+
+                if (epoch + 1) % 1 == 0:
                     print('Writing back the results on the provided path ...')
-                    np.savetxt(os.path.join(exp_dir, f'c_{epoch}.csv'), c, delimiter=',', fmt='%d')
+                    # np.savetxt(os.path.join(exp_dir, f'c_{epoch}.csv'), c, delimiter=',', fmt='%d')
+                    #yw
+                    np.savetxt(os.path.join(exp_dir, f'c_{epoch}.csv'), c.cpu(), delimiter=',', fmt='%d')
                     np.savetxt(os.path.join(exp_dir, f'num_clust_{epoch}.csv'), np.array(num_clust), delimiter=',', fmt='%d')
                     np.savetxt(os.path.join(exp_dir, f'partition_clustering_{epoch}.csv'), np.array(partition_clustering), delimiter=',', fmt='%s')
                     np.savetxt(os.path.join(exp_dir, f'lowest_level_centroids_{epoch}.csv'), lowest_level_centroids, delimiter=',', fmt='%s')
@@ -369,59 +385,68 @@ def main_worker(gpu, ngpus_per_node, args, exp_dir):
 
                 # save the clustering result
                 torch.save(cluster_result, os.path.join(exp_dir, 'clusters_%d'%epoch))
-                # added by sally #
-                c = torch.from_numpy(c).to(device)
+            else:
+                c_size = torch.zeros(2, dtype=torch.long).cuda(args.gpu)
 
-            # dist.barrier()  
-            # print(f"Process {dist.get_rank()}")
+            ##yw
+            dist.barrier()
+            # # broadcast clustering result
             # for k, data_list in cluster_result.items():
             #     for data_tensor in data_list:
-            #         # print(f'Process {dist.get_rank()}, Before broadcast: shape={data_tensor.shape}, device={data_tensor.device}')
-            #         dist.broadcast(data_tensor, 0, async_op=False)
-            #         # print(f'Process {dist.get_rank()}, After broadcast: shape={data_tensor.shape}, device={data_tensor.device}')
+            #         dist.broadcast(data_tensor, src = 0, async_op=False)
+            # Broadcast the data in cluster_result
+            for key in cluster_result.keys():
+                broadcast_tensor_list(cluster_result[key], src=0, rank=args.gpu)
+
+            # For demonstration, printing the sizes of the tensors in the lists
+            # print(f"Rank {args.gpu} has data:")
+            # for key in cluster_result.keys():
+            #     print(f"  {key}: {[t.size() for t in cluster_result[key]]}")
+
+            # print(f"After cluster boardcast on rank {args.gpu}: {cluster_result}")
             
-            ##check here the c and cluster result looks like
-            print(f"Process {torch.distributed.get_rank()} reached the broadcast")
             dist.barrier()
-            # broadcast clustering result
-            for k, data_list in cluster_result.items():
-                for data_tensor in data_list:
-                    print('data_list', data_list)
-                    dist.broadcast(data_tensor, 0, async_op=False)
-            # print('broadcasting cluster successful')
+            # Broadcast the size of the tensor to all ranks
 
-            dist.broadcast(c, 0, async_op=False)
-            # print('broadcasting C successful')
+            dist.broadcast(c_size, src=0)
+            # Create the tensor on all ranks
+            if args.gpu!= 0:
+                # tensor = torch.zeros(tensor_size.item(), dtype=torch.float32).cuda(args.gpu)
+                c = torch.zeros(tuple(c_size.tolist()), dtype=torch.float32).cuda(args.gpu)
 
-            # print(f"Process {torch.distributed.get_rank()} completed the broadcast")
+            dist.broadcast(c, src=0)
+            # print(f"Process {torch.distributed.get_rank()} passed the barrier")
+            # print(f"After broadcast on rank {args.gpu}: {c}")
 
             dist.barrier()
-            print(f"Process {torch.distributed.get_rank()} passed the barrier")
 
-        # print(cluster_result)
         if args.distributed:
-            print('move to here...')
             train_sampler.set_epoch(epoch)
+        
         adjust_learning_rate(optimizer, epoch, args)
 
-        # train for one epoch
-        start_time = time.time()    
-        # print('check what is c here..', cluster_result,torch.cuda.current_device())
-        train(train_loader, model, criterion, optimizer, epoch, args, cluster_result, c)    
+        # yw
+        start_time = time.time()
+        c = c.cpu().numpy().astype('int32')
+        # print('check what is c here..', c)
+        # print('check what is cluters_result here..', cluster_result)
+        print('start training =========================================')
+        train(train_loader, model, criterion, optimizer, epoch, args, cluster_result, c)
 
         end_time = time.time()
         # Calculate and print the epoch time
         epoch_time = end_time - start_time
         print(f"Time for one epoch: {epoch_time:.2f} seconds")
 
-        if (epoch + 1) % 10 == 0 and (not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0)):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename='{}/checkpoint_{:04d}.pth.tar'.format(exp_dir, epoch))
-
+        if (epoch + 1) % 10 == 0 or epoch == args.epochs - 1:
+            if (not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                    and args.rank % ngpus_per_node == 0)):
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                }, is_best=False, filename='{}/checkpoint_{:04d}_{}.pth.tar'.format(exp_dir, epoch, args.seed))
+                print('Saving done! =========================================')
 
 def train(train_loader, model, criterion, optimizer, epoch, args, cluster_result=None, c=None):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -437,23 +462,22 @@ def train(train_loader, model, criterion, optimizer, epoch, args, cluster_result
     batch_num = 0
     
     for i, (data, target, aug1, aug2, index) in enumerate(train_loader):
-        print('current batch_num:', batch_num)
+        if dist.get_rank()==0:
+            print('current batch_num:', batch_num)
         # measure data loading time
         data_time.update(time.time() - end)
         if args.gpu is not None:
-            # print(f"Current GPU: {torch.cuda.current_device()}")
             aug1 = aug1.unsqueeze(3)
             aug2 = aug2.unsqueeze(3)
             aug1, aug2 = aug1.float().cuda(args.gpu, non_blocking=True), aug2.float().cuda(args.gpu, non_blocking=True)
-            # print('aug1 data device,', aug1.device)
 
         #compute output
+        # print(f"Running on GPU: {torch.cuda.current_device()}")
         output, target, output_proto, target_proto = model(im_q=aug1, im_k=aug2, cluster_result=cluster_result, c=c, index=index)
-
         # instance-wise contrastive loss (infoNCE)
         loss = criterion(output.cuda(args.gpu, non_blocking=True), torch.tensor(target).float().cuda(args.gpu, non_blocking=True))
 
-        # print(f'instance-wise contrastive loss:{loss}')
+        print(f'instance-wise contrastive loss:{loss}')
         if args.protoNCE_only is True:
             loss = loss - loss
 
@@ -483,6 +507,112 @@ def train(train_loader, model, criterion, optimizer, epoch, args, cluster_result
             progress.display(i)
         batch_num += 1
 
+# def broadcast_tensor_list(tensor_list, src, rank):
+#     # Broadcast the number of tensors in the list
+#     num_tensors = torch.tensor([len(tensor_list)], dtype=torch.long).cuda(rank)
+#     dist.broadcast(num_tensors, src=src)
+#     num_tensors = num_tensors.item()
+
+#     # Broadcast each tensor in the list
+#     for i in range(num_tensors):
+#         if rank != src:
+#             # Initialize an empty tensor which will be overwritten by broadcast
+#             tensor_list.append(torch.empty(1, dtype=torch.float32).cuda(rank))
+#         dist.broadcast(tensor_list[i], src=src)
+        
+def broadcast_tensor_list(tensor_list, src, rank):
+    # Broadcast the number of tensors in the list
+    num_tensors = torch.tensor([len(tensor_list)], dtype=torch.long).cuda(rank)
+    dist.broadcast(num_tensors, src=src)
+    num_tensors = num_tensors.item()
+
+    dtype_to_int = {
+    torch.float32: 0,
+    torch.float64: 1,
+    torch.float16: 2,
+    torch.uint8: 3,
+    torch.int8: 4,
+    torch.int16: 5,
+    torch.int32: 6,
+    torch.int64: 7,
+    torch.bool: 8
+}
+
+    int_to_dtype = {v: k for k, v in dtype_to_int.items()}
+
+    if rank != src:
+        tensor_list.extend([None] * num_tensors)
+
+    for i in range(num_tensors):
+        # Broadcast the data type of each tensor
+        # if rank == src:
+        #     tensor_dtype = torch.tensor(tensor_list[i].dtype, dtype=torch.long).cuda(rank)
+        # else:
+        #     tensor_dtype = torch.tensor(0, dtype=torch.long).cuda(rank)
+        # dist.broadcast(tensor_dtype, src=src)
+        # tensor_dtype = torch.dtype(tensor_dtype.item())
+        # Broadcast the data type of each tensor
+        if rank == src:
+            tensor_dtype = torch.tensor(dtype_to_int[tensor_list[i].dtype], dtype=torch.long).cuda(rank)
+        else:
+            tensor_dtype = torch.tensor(0, dtype=torch.long).cuda(rank)
+        dist.broadcast(tensor_dtype, src=src)
+        tensor_dtype = int_to_dtype[tensor_dtype.item()]
+
+        # Broadcast the dimension of each tensor
+        if rank == src:
+            tensor_dim = torch.tensor(len(tensor_list[i].size()), dtype=torch.long).cuda(rank)
+        else:
+            tensor_dim = torch.tensor(0, dtype=torch.long).cuda(rank)
+        dist.broadcast(tensor_dim, src=src)
+        tensor_dim = tensor_dim.item()
+
+        # Broadcast the size of each tensor
+        if rank == src:
+            tensor_size = torch.tensor(tensor_list[i].size(), dtype=torch.long).cuda(rank)
+        else:
+            tensor_size = torch.zeros(tensor_dim, dtype=torch.long).cuda(rank)
+        dist.broadcast(tensor_size, src=src)
+
+        if rank != src:
+            if tensor_size.numel() == 0:
+                continue  # Skip broadcasting if tensor is empty
+            tensor_list[i] = torch.zeros(tuple(tensor_size.tolist()), dtype=tensor_dtype).cuda(rank)
+
+        dist.broadcast(tensor_list[i], src=src)
+
+# def broadcast_tensor_list(tensor_list, src, rank):
+#     # Broadcast the number of tensors in the list
+#     num_tensors = torch.tensor([len(tensor_list)], dtype=torch.long).cuda(rank)
+#     dist.broadcast(num_tensors, src=src)
+#     num_tensors = num_tensors.item()
+
+#     if rank != src:
+#         tensor_list.extend([None] * num_tensors)
+
+#     for i in range(num_tensors):
+#         # Broadcast the dimension of each tensor
+#         # change to boardcast the type of each tensor...
+#         if rank == src:
+#             tensor_dim = torch.tensor(len(tensor_list[i].size()), dtype=torch.long).cuda(rank)
+#         else:
+#             tensor_dim = torch.tensor(0, dtype=torch.long).cuda(rank)
+#         dist.broadcast(tensor_dim, src=src)
+#         tensor_dim = tensor_dim.item()
+
+#         # Broadcast the size of each tensor
+#         if rank == src:
+#             tensor_size = torch.tensor(tensor_list[i].size(), dtype=torch.long).cuda(rank)
+#         else:
+#             tensor_size = torch.zeros(tensor_dim, dtype=torch.long).cuda(rank)
+#         dist.broadcast(tensor_size, src=src)
+
+#         if rank != src:
+#             if tensor_size.numel() == 0:
+#                 continue  # Skip broadcasting if tensor is empty
+#             tensor_list[i] = torch.zeros(tuple(tensor_size.tolist()), dtype=torch.float32).cuda(rank)
+
+#         dist.broadcast(tensor_list[i], src=src)
 
 
             
@@ -590,7 +720,6 @@ def hierarchical_clustering(x, args, initial_rank=None, distance='cosine', ensur
     min_dis_dict = dict()
 
     """mask strategy"""
-    ### different strategies to select&remove tne outliers...
     # mode 1: mask one point farthest from the centroid of each cluster
     if args.mask_mode == 'mask_farthest':
         for i in range(0, num_clust):  # calculate the distance between points and the centroids within each cluster
@@ -793,8 +922,6 @@ def hierarchical_clustering(x, args, initial_rank=None, distance='cosine', ensur
         im2cluster = torch.LongTensor(im2cluster).cuda()
         results['im2cluster'].append(im2cluster)
 
-    ##results = [results,c]
-
     return c, num_clust, partition_clustering, lowest_level_centroids, req_c, results
     # c: NxP matrix. cluster label for every partition P. array(n_samples, n_partitions)
     # num_clust: number of clusters. array(n_partitions)
@@ -964,5 +1091,11 @@ def req_numclust(c, data, req_clust, distance):
         c_, mat = get_merge(c_, u, data)
     return c_
 
+
+
 if __name__ == '__main__':
     main()
+    start_time = time.time()
+    end_time = time.time()
+    print(f"Time epochs: {end_time - start_time:.2f} seconds")
+    print('Training is done!')

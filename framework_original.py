@@ -21,8 +21,6 @@ def ResNet18(low_dim=128, dataset_name='wisdm'):
         in_channels = 6
     elif dataset_name == 'sleepEDF':
         in_channels = 1
-    elif dataset_name == 'ECG':
-        in_channels = 2
 
     net = resnet.ResNet(resnet.BasicBlock, [2, 2, 2, 2], low_dim)
     if dataset_name=='wisdm':
@@ -91,7 +89,7 @@ class MHCCL(nn.Module):
         """
         Momentum update of the key encoder
         """
-        # print('-----momentum update-----')
+        print('-----momentum update-----')
         for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
             param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
 
@@ -166,8 +164,6 @@ class MHCCL(nn.Module):
             logits, targets, proto_logits, proto_targets
         """
 
-        # print('move to forward here...')
-
         if is_eval:
             k = self.encoder_k(im_q)
             k = nn.functional.normalize(k, dim=1)
@@ -190,8 +186,8 @@ class MHCCL(nn.Module):
         q = self.encoder_q(im_q)  # queries: NxC
         q = nn.functional.normalize(q, dim=1)
 
-        # print(f'q.shape:{q.shape}')  # aug1 [128,128]
-        # print(f'k.shape:{k.shape}')  # aug2 [128,128]
+        print(f'q.shape:{q.shape}')  # aug1 [128,128]
+        print(f'k.shape:{k.shape}')  # aug2 [128,128]
 
         # if cluster_result is not None:
         proto_labels = []
@@ -201,20 +197,13 @@ class MHCCL(nn.Module):
         p0_label = {} #dict (key:index, value:label)
         label_index = {} #dict
         index_u = {}
-
-
-        #yw:check the index and list range...
-        for u in range(0, index.shape[0]): #index.shape[0] = 128
-            u_item = index[u].item()
-            # print('what is u_item here',u_item)
-
+        for u in range(0, index.shape[0]):
             index_u[index[u].item()] = u
             p0_label[index[u].item()] = cluster_result['im2cluster'][0][index[u]].item()
         # find keys(ids) with same value(cluster label) in dict p0_label
         for key, value in p0_label.items():
             label_index.setdefault(value, []).append(key)
 
-        # print(p0_label.device, p0_label) ##???why here value exists not int??
         posid = {}
         negid = {}
         neg_instances = [[] for _ in range(len(p0_label))]
@@ -283,24 +272,19 @@ class MHCCL(nn.Module):
         temp_label[0: self.posi*2] = 1
         labels = np.tile(temp_label, (q.shape[0], 1)) # [B,2posi+2negi] each row has 2posi label1 and 2negi label0
         # print(f'labels of instances:{labels}')
-        # print(f'labels of instances.shape:{labels.shape}')
+        print(f'labels of instances.shape:{labels.shape}')
 
         """cluster-level contrastive learning uses multiple partitions"""
         for n, (im2cluster, prototypes) in enumerate(
                 zip(cluster_result['im2cluster'], cluster_result['centroids'])):
-            # print(f'n:{n}') # partition-layer
+            print(f'n:{n}') # partition-layer
 
             # get positive prototypes
             pos_proto_id = im2cluster[index]
-            # print(f'pos_proto_id:{pos_proto_id}')
 
-            # pos_prototypes = prototypes[pos_proto_id]
-            ##yw
-            pos_prototypes = prototypes[pos_proto_id.long()]
+            pos_prototypes = prototypes[pos_proto_id]
 
-            # all_proto_id = [i for i in range(im2cluster.max() + 1)] 
-            ##yw
-            all_proto_id = [i for i in range(int(im2cluster.max().item()) + 1)]
+            all_proto_id = [i for i in range(im2cluster.max() + 1)] 
 
             new = pos_proto_id.split(1, 0)
             neg_proto_id = []
@@ -323,16 +307,12 @@ class MHCCL(nn.Module):
                 m = c.T
                 if new[i] not in pdict.keys():
                     pos_next_partition_label[i] = m[n + 1][np.argwhere(m[n] == int(new[i]))[0][0]]
-                    ##yw:
-                    # pos_next_partition_label[i] = m[n + 1][np.argwhere((m[n] == int(new[i])).cpu())[0][0]]
                     pdict[int(new[i])] = pos_next_partition_label[i]
 
                 mask_list = []
                 for j in range(0, len(neg_proto_id[i])):
                     if neg_proto_id[i][j] not in pdict.keys():
                         neg_next_partition_label[i][j] = m[n + 1][np.argwhere(m[n] == int(neg_proto_id[i][j]))[0][0]]
-                        ##yw
-                        # neg_next_partition_label[i][j] = m[n + 1][np.argwhere((m[n] == int(neg_proto_id[i][j])).cpu())[0][0]]
                         pdict[int(neg_proto_id[i][j])] = neg_next_partition_label[i][j]
                         if pos_next_partition_label[i] == neg_next_partition_label[i][j]:
                             mask_list.append(neg_proto_id[i][j]) # all fake negs that need to be masked
@@ -345,7 +325,6 @@ class MHCCL(nn.Module):
                     new_pos_proto_id[i].append(mask_list[a])
 
                 """1- random sample n negative prototypes after masking"""
-                # print(f'before masking_len(neg_proto_id[i]):{len(neg_proto_id[i])}')
                 neg_proto_id[i] = sample(neg_proto_id[i], self.negp)
                 # print(f'after masking_len(neg_proto_id[i]):{len(neg_proto_id[i])}')
                 # if len(neg_proto_id[i]) >= maxlen:
@@ -384,27 +363,27 @@ class MHCCL(nn.Module):
             # q[n,c] -> newq[n,1,c]     all[n,m+r,c] -> all[n,c,m+r]
 
             newq = q.unsqueeze(1)
-            # print(f'newq.shape:{newq.shape}')
+            print(f'newq.shape:{newq.shape}')
 
             proto_selected = torch.reshape(proto_selected, (proto_selected.shape[0], proto_selected.shape[2], proto_selected.shape[1]))
             # [batch_size, posp+negp, dim] -> [batch_size, dim, posp+negp]
-            # print(f'proto_selected.shape:{proto_selected.shape}')
+            print(f'proto_selected.shape:{proto_selected.shape}')
             # newq[n,1,c] x all[n,c,m+r] = logits[n,1,m+r]
 
             logits_proto = torch.einsum('nab,nbc->nac', [newq, proto_selected])
             # [batch_size,1,dim] x [batch_size, dim, posp+negp] = [batch_size, 1, posp+negp]
-            # print(f'logits_proto.shape:{logits_proto.shape}')
+            print(f'logits_proto.shape:{logits_proto.shape}')
             # print(f'logits_proto:{logits_proto}')
 
             logits_proto = logits_proto.squeeze(1)
-            # print(f'logits_proto.shape:{logits_proto.shape}')
+            print(f'logits_proto.shape:{logits_proto.shape}')
             # print(f'logits_proto:{logits_proto}')
 
             # labels of prototypes
             temp_proto_label = np.zeros(self.posp + self.negp)
             temp_proto_label[0: self.posp] = 1
             labels_proto = np.tile(temp_proto_label, (q.shape[0], 1))  # [B,2posi+2negi] each row has posp label1 and negp label0
-            # print(f'labels of prototypes.shape:{labels_proto.shape}')
+            print(f'labels of prototypes.shape:{labels_proto.shape}')
             # print(f'labels of prototypes:{labels_proto}')
 
             # scaling temperatures for the selected prototypes

@@ -1,5 +1,5 @@
 python main.py \
---dataset_name SHAR \
+--dataset_name eplipsy \
 --lr 0.03 \
 --batch_size 128 \
 --mlp --cos \ 

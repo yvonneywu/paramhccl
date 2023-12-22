@@ -20,12 +20,23 @@ import torch.utils.data
 import torch.utils.data.distributed
 
 from sklearn.metrics import cohen_kappa_score, classification_report, confusion_matrix
-from dataloaderq.dataloaderm import data_generator
+from dataloaderq.dataloaderm_ori import data_generator
 from sklearn.manifold import TSNE
 from torchvision.models import resnet
+from sklearn.metrics import roc_auc_score
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+
+print(torch.cuda.is_available())
+torch.backends.cudnn.enabled = False
+
+with_gpu = torch.cuda.is_available()
+if with_gpu:
+     device = torch.device("cuda")
+else:
+     device = torch.device("cpu")
+print('We are using %s now.' %device)
 
 parser = argparse.ArgumentParser(description='Downstream Classification')
 
@@ -96,6 +107,10 @@ def ResNet18(low_dim=128, dataset_name='wisdm'):
         in_channels = 2
     elif dataset_name == 'EigenWorms':
         in_channels = 6
+    elif dataset_name  == 'sleepEDF':
+        in_channels = 1
+    elif dataset_name  == 'ECG':
+        in_channels = 2
 
     net = resnet.ResNet(resnet.BasicBlock, [2, 2, 2, 2], low_dim)
     if dataset_name == 'wisdm':
@@ -296,10 +311,14 @@ def main_worker(gpu, ngpus_per_node, args):
         from config_files.EigenWorms_Configs import Config as Configs
         configs = Configs()
         train_loader, val_loader = data_generator('data/EigenWorms', configs, 'self_supervised')
-    elif args.dataset_name == 'FingerMovements':
+    elif args.dataset_name == 'sleepEDF':
         from config_files.FingerMovements_Configs import Config as Configs
         configs = Configs()
-        train_loader, val_loader = data_generator('data/FingerMovements', configs, 'self_supervised')
+        train_loader, val_loader = data_generator('data/sleepEDF', configs, 'self_supervised')
+    elif args.dataset_name == 'ECG':
+        from config_files.FingerMovements_Configs import Config as Configs
+        configs = Configs()
+        train_loader, val_loader = data_generator('data/ECG', configs, 'self_supervised')
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -473,10 +492,16 @@ def validate(val_loader, model, criterion, args, logger, epoch):
 
         print('Starting to save classification performance...')
         r = classification_report(trgs_for_eb, outs_for_eb, digits=6, output_dict=True)
+
         df = pd.DataFrame(r)
         df["cohen"] = cohen_kappa_score(trgs_for_eb, outs_for_eb)
-        df.to_csv(f'performance_{args.dataset_name}.csv', mode='a')
 
+        if args.dataset_name == 'ECG':
+            # Calculate AUROC
+            auroc = roc_auc_score(trgs_for_eb, representations_for_eb[:, 1])
+            df["auroc"] = auroc
+
+        df.to_csv(f'performance_{args.dataset_name}.csv', mode='a')
         if args.dataset_name == 'HAR':
             labels_name = ['WALKING', 'WALKING_UPSTAIRS', 'WALKING_DOWNSTAIRS', 'SITTING', 'STANDING', 'LAYING']  # HAR
         elif args.dataset_name == 'epilepsy':
@@ -494,7 +519,7 @@ def validate(val_loader, model, criterion, args, logger, epoch):
         elif args.dataset_name == 'FingerMovements':
             labels_name = ['Left', 'Right']
       
-        if epoch == 99:
+        if epoch == args.epochs - 1:
             ### plot confusion matrix
             print('Starting to plot confusion matrix...')
             plot_confusion_matrix(cm, labels_name, f"{args.dataset_name}--- Confusion Matrix")
