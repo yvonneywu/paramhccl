@@ -518,6 +518,10 @@ def validate(val_loader, model, criterion, args, logger, epoch):
             labels_name = ['wild-type', 'goa-1', 'unc-1', 'unc-38', 'unc-63']
         elif args.dataset_name == 'FingerMovements':
             labels_name = ['Left', 'Right']
+        elif args.dataset_name == 'sleepEDF':
+            labels_name = ['0', '1','2', '3', '4', '5']
+        elif args.dataset_name == 'ECG':
+            labels_name = ['0', '1','2', '3']
       
         if epoch == args.epochs - 1:
             ### plot confusion matrix

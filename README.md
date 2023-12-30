@@ -12,3 +12,8 @@ python main_sally.py --dataset_name epilepsy --epochs 100 --seed 0 --dist_url 't
 ## change the dataset_name (sleepEDF/ECG) and epochs (Pretraining epochs-1) here
 Evaluate:
 python classifier.py --dataset_name epilepsy --pretrained experiment_dataset_name/checkpoint_epochs_seed.pth.tar --lr 5 --seed 0 --dist_url 'tcp://localhost:10001' --multiprocessing_distributed --world_size 1 --rank 0 --id epilepsy_linear_0001 
+
+
+git add .
+git commit -m "Initial commit"
+git push -u origin master

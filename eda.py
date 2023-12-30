@@ -4,7 +4,13 @@ import torch
 # print(np.__version__)
 import os 
 
-data_path = './data/ECG/'
-train_dataset = torch.load(os.path.join(data_path, "test.pt"))
-X_train = train_dataset["samples"]
-print(X_train.shape)
+# import tensorboard_logger
+# print(tensorboard_logger.__version__)
+
+import tensorboard_logger as tb_logger
+print(tb_logger.__version__)
+
+# data_path = './data/ECG/'
+# train_dataset = torch.load(os.path.join(data_path, "test.pt"))
+# X_train = train_dataset["samples"]
+# print(X_train.shape)
