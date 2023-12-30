@@ -6,7 +6,7 @@ import time
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
-import tensorboard_logger as tb_logger
+# import tensorboard_logger as tb_logger
 import pandas as pd
 
 import torch
@@ -199,10 +199,10 @@ def main_worker(gpu, ngpus_per_node, args):
     model.fc.weight.data.normal_(mean=0.0, std=0.01)
     model.fc.bias.data.zero_()
     
-    if args.gpu==0:
-        logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
-    else:
-        logger = None
+    # if args.gpu==0:
+    #     logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
+    # else:
+    #     logger = None
         
     # load from pre-trained, before DistributedDataParallel constructor
     if args.pretrained:
