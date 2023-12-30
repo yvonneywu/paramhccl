@@ -24,6 +24,8 @@ from dataloaderq.dataloaderm_ori import data_generator
 from sklearn.manifold import TSNE
 from torchvision.models import resnet
 from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score
+from sklearn.preprocessing import label_binarize
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
@@ -456,8 +458,9 @@ def validate(val_loader, model, criterion, args, epoch):#logger,
         outs = np.array([])  # predict labels
         trgs = np.array([])  # true labels
         representations = np.empty(shape=[0, args.low_dim])
+        probas = np.array([]) # for storing predicted probabilities
 
-        for i, (data, target, aug1, aug2, index) in enumerate(val_loader):
+        for i, (data, target, aug1, aug2, _) in enumerate(val_loader):
             data = data.unsqueeze(3)
             aug1 = aug1.unsqueeze(3)
             aug2 = aug2.unsqueeze(3)
@@ -498,12 +501,18 @@ def validate(val_loader, model, criterion, args, epoch):#logger,
         df["cohen"] = cohen_kappa_score(trgs_for_eb, outs_for_eb)
 
         if args.dataset_name == 'ECG':
-            # Calculate AUROC
-            # auroc = roc_auc_score(trgs_for_eb, representations_for_eb[:, 1])
-            auroc = roc_auc_score(trgs_for_eb, representations_for_eb[:, 1], multi_class='ovo')
-            df["auroc"] = auroc
+            softmax_probs = torch.nn.functional.softmax(torch.tensor(representations), dim=1).cpu().numpy()
+
+            if probas.size == 0:
+                probas = softmax_probs
+            else:
+                probas = np.vstack((probas, softmax_probs))
+            y_true_bin = label_binarize(trgs_for_eb, classes=np.arange(4))
+            auprc = average_precision_score(y_true_bin, probas, average='macro')
+            df["auprc"] = auprc
 
         df.to_csv(f'performance_{args.dataset_name}.csv', mode='a')
+
         if args.dataset_name == 'HAR':
             labels_name = ['WALKING', 'WALKING_UPSTAIRS', 'WALKING_DOWNSTAIRS', 'SITTING', 'STANDING', 'LAYING']  # HAR
         elif args.dataset_name == 'epilepsy':
@@ -539,6 +548,8 @@ def validate(val_loader, model, criterion, args, epoch):#logger,
         #     fig = plot_embedding(result, trgs_for_eb, f't-SNE Embeddings of Time Series Representations---Dataset: {args.dataset_name}', args)
         #     fig.tight_layout()
         #     plt.savefig(f'eb_{args.dataset_name}.png', format='png', bbox_inches='tight')
+
+
 
 def save_checkpoint(state, filename='checkpoint_clf.pth.tar'):
     torch.save(state, filename)

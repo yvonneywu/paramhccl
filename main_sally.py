@@ -7,7 +7,7 @@ import torch.optim
 import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
-import faiss
+# import faiss
 
 import copy
 import builtins
