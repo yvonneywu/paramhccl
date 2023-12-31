@@ -24,7 +24,7 @@ from dataloaderq.dataloaderm_ori import data_generator
 from sklearn.manifold import TSNE
 from torchvision.models import resnet
 from sklearn.metrics import roc_auc_score
-from sklearn.metrics import average_precision_score
+from sklearn.metrics import average_precision_score, precision_score
 from sklearn.preprocessing import label_binarize
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -507,8 +507,14 @@ def validate(val_loader, model, criterion, args, epoch):#logger,
                 probas = softmax_probs
             else:
                 probas = np.vstack((probas, softmax_probs))
-            y_true_bin = label_binarize(trgs_for_eb, classes=np.arange(4))
-            auprc = average_precision_score(y_true_bin, probas, average='macro')
+            # y_true_bin = label_binarize(trgs_for_eb, classes=np.arange(4))
+            print(trgs_for_eb.shape)
+            # print(probas.shape)
+            print(outs_for_eb.shape)
+
+            # auprc = average_precision_score(trgs_for_eb, outs_for_eb, average='macro')
+            auprc = precision_score(trgs_for_eb, outs_for_eb, average='macro')
+
             df["auprc"] = auprc
 
         df.to_csv(f'performance_{args.dataset_name}.csv', mode='a')

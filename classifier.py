@@ -525,20 +525,22 @@ def validate(val_loader, model, criterion, args, epoch):#logger,
         elif args.dataset_name == 'ECG':
             labels_name = ['0', '1','2', '3']
       
-        # if epoch == args.epochs - 1:
-        #     ### plot confusion matrix
-        #     print('Starting to plot confusion matrix...')
-        #     plot_confusion_matrix(cm, labels_name, f"{args.dataset_name}--- Confusion Matrix")
-        #     plt.subplots_adjust(bottom=0.2, left=0.2)
-        #     plt.savefig(f'cm_{args.dataset_name}.png', format='png', bbox_inches='tight')
-        #
-        #     ### TSNE Embeddings of representations
-        #     print('Starting to compute t-SNE Embeddings...')
-        #     ts = TSNE(perplexity=40, n_components=2, init='pca', random_state=0 , n_iter=3000)
-        #     result = ts.fit_transform(representations_for_eb)
-        #     fig = plot_embedding(result, trgs_for_eb, f't-SNE Embeddings of Time Series Representations---Dataset: {args.dataset_name}', args)
-        #     fig.tight_layout()
-        #     plt.savefig(f'eb_{args.dataset_name}.png', format='png', bbox_inches='tight')
+        if epoch == args.epochs - 1:
+            ### plot confusion matrix
+            print('Starting to plot confusion matrix...')
+            plot_confusion_matrix(cm, labels_name, f"{args.dataset_name}--- Confusion Matrix")
+            plt.subplots_adjust(bottom=0.2, left=0.2)
+            plt.savefig(f'cm_{args.dataset_name}.png', format='png', bbox_inches='tight')
+
+            ### TSNE Embeddings of representations
+            print('Starting to compute t-SNE Embeddings...')
+            ts = TSNE(perplexity=40, n_components=2, init='pca', random_state=0 , n_iter=3000)
+            result = ts.fit_transform(representations_for_eb)
+            fig = plot_embedding(result, trgs_for_eb, f't-SNE Embeddings of Time Series Representations---Dataset: {args.dataset_name}', args) 
+            fig.tight_layout()
+            plt.savefig(f'eb_{args.dataset_name}.png', format='png', bbox_inches='tight')
+
+
 
 def save_checkpoint(state, filename='checkpoint_clf.pth.tar'):
     torch.save(state, filename)

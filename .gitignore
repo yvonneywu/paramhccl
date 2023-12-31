@@ -1,5 +1,6 @@
-data/
-experiment_epilepsy/
-experiment_sleepEDF/
-Linear_eval/
-test_result/
+data/*
+experiment_epilepsy/*
+experiment_sleepEDF/*
+experiment_ECG/*
+Linear_eval/*
+test_result/*
